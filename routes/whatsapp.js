@@ -33,8 +33,30 @@ router.get('/test', (req, res) => {
     res.json({
         status: 'WhatsApp webhook is working!',
         timestamp: new Date().toISOString(),
-        twilioConfigured: !!(process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN)
+        twilioConfigured: !!(process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN),
+        backendUrl: process.env.BACKEND_URL
     });
+});
+
+// Diagnostic endpoint - test database connection
+router.get('/test-db', async (req, res) => {
+    try {
+        const { data, error } = await supabase
+            .from('conversations')
+            .select('count')
+            .limit(1);
+
+        res.json({
+            status: 'Database test',
+            conversationsTableExists: !error,
+            error: error ? error.message : null
+        });
+    } catch (err) {
+        res.json({
+            status: 'Database test failed',
+            error: err.message
+        });
+    }
 });
 
 router.post('/incoming', async (req, res) => {
