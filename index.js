@@ -15,6 +15,7 @@ initializeTwilio();
 
 // Middleware — these two lines let Express read JSON from requests
 app.use(express.json());
+app.use(express.urlencoded({ extended: true })); // Required for Twilio webhooks
 app.use(cors());
 
 // Connect orders routes

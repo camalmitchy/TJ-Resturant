@@ -28,11 +28,29 @@ async function sendMessage(to, message) {
     }
 }
 
+// Test endpoint - verify webhook is working
+router.get('/test', (req, res) => {
+    res.json({
+        status: 'WhatsApp webhook is working!',
+        timestamp: new Date().toISOString(),
+        twilioConfigured: !!(process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN)
+    });
+});
+
 router.post('/incoming', async (req, res) => {
+    console.log('=== WhatsApp Webhook Received ===');
+    console.log('Body:', JSON.stringify(req.body, null, 2));
+
     const from = req.body.From;         // e.g. "whatsapp:+254712345678"
     const body = req.body.Body?.trim(); // what the customer typed
 
-    console.log('WhatsApp message from:', from, '- Body:', body);
+    console.log('From:', from, '- Message:', body);
+
+    // Validate input
+    if (!from || !body) {
+        console.error('❌ Missing From or Body in request');
+        return res.sendStatus(400);
+    }
 
     try {
         // Get or create conversation state
