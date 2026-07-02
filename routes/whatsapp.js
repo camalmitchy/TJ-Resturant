@@ -3,18 +3,10 @@ const router = express.Router();
 const twilio = require('twilio');
 const axios = require('axios');
 const { getSession, saveSession, clearSession, toLocalPhone } = require('../services/whatsappSession');
+const { MENU, findMenuItem, buildMenuText } = require('../data/menu');
 
 const client = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
 const BACKEND_URL = process.env.BACKEND_URL || 'https://tj-resturant.onrender.com';
-
-const MENU = [
-    { id: 1, name: 'Chicken Burger', price: 450 },
-    { id: 2, name: 'Club Sandwich', price: 380 },
-    { id: 3, name: 'Beef Stew + Rice', price: 520 },
-    { id: 4, name: 'Pasta Carbonara', price: 600 },
-    { id: 5, name: 'Vegetable Salad', price: 280 },
-    { id: 6, name: 'Fresh Juice', price: 180 },
-];
 
 const START_KEYWORDS = ['hi', 'hello', 'order', 'menu', 'start'];
 
@@ -24,10 +16,6 @@ async function sendMessage(to, message) {
         to,
         body: message,
     });
-}
-
-function buildMenuText() {
-    return MENU.map(item => `${item.id}. ${item.name} — KES ${item.price}`).join('\n');
 }
 
 router.post('/incoming', async (req, res) => {
@@ -55,7 +43,7 @@ router.post('/incoming', async (req, res) => {
 
         if (START_KEYWORDS.includes(normalised) || !session) {
             await sendMessage(from,
-                `👋 Welcome to Hotel Room Service!\n\nHere is our menu:\n\n${buildMenuText()}\n\nReply with the *number* of the item you want to order.`
+                `👋 Welcome to *TJ Resturant*!\n\nHere is our menu:\n\n${buildMenuText()}\n\nReply with the *number* of the item you want to order.`
             );
 
             const { error: saveError } = await saveSession(from, {
@@ -73,17 +61,17 @@ router.post('/incoming', async (req, res) => {
 
         if (step === 'menu_shown') {
             const choice = parseInt(body, 10);
-            const selectedItem = MENU.find(item => item.id === choice);
+            const selectedItem = findMenuItem(choice);
 
             if (!selectedItem) {
                 await sendMessage(from,
-                    `❌ Please reply with a number between 1 and ${MENU.length}.\n\nFor example, type *1* for Chicken Burger.`
+                    `❌ Please reply with a number between 1 and ${MENU.length}.\n\nFor example, type *1* for Milk Tea.`
                 );
                 return;
             }
 
             await sendMessage(from,
-                `✅ You selected: *${selectedItem.name}* — KES ${selectedItem.price}\n\nWhat is your *room number*? (e.g. 204)`
+                `✅ You selected: *${selectedItem.name}* — KSh ${selectedItem.price}\n\nWhat is your *room number*? (e.g. 204)`
             );
 
             await saveSession(from, {
@@ -119,7 +107,7 @@ router.post('/incoming', async (req, res) => {
                 });
 
                 await sendMessage(from,
-                    `📋 *Order Summary*\n\n🍽️ Item: *${session.food_item}*\n🚪 Room: *${roomNumber}*\n💰 Total: *KES ${session.price}*\n\n💳 *Payment prompt sent!*\n\nCheck your phone for an M-Pesa request of *KES ${session.price}*. Enter your M-Pesa PIN to complete your order.\n\nYour food will be delivered to Room *${roomNumber}* once payment is confirmed. 🚀`
+                    `📋 *Order Summary*\n\n🍽️ Item: *${session.food_item}*\n🚪 Room: *${roomNumber}*\n💰 Total: *KSh ${session.price}*\n\n💳 *Payment prompt sent!*\n\nCheck your phone for an M-Pesa payment to *TJ Resturant* of *KSh ${session.price}*. Enter your M-Pesa PIN to complete your order.\n\nYour food will be delivered to Room *${roomNumber}* once payment is confirmed. 🚀`
                 );
             } catch (mpesaError) {
                 console.error('STK push error:', mpesaError.response?.data || mpesaError.message);
@@ -133,7 +121,7 @@ router.post('/incoming', async (req, res) => {
 
         if (step === 'awaiting_payment') {
             await sendMessage(from,
-                `⏳ Waiting for your M-Pesa payment of *KES ${session.price}* for *${session.food_item}*.\n\nComplete the prompt on your phone, or type *hi* to start a new order.`
+                `⏳ Waiting for your M-Pesa payment of *KSh ${session.price}* to *TJ Resturant* for *${session.food_item}*.\n\nComplete the prompt on your phone, or type *hi* to start a new order.`
             );
             return;
         }

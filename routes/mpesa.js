@@ -82,7 +82,7 @@ router.post('/stk-push', async (req, res) => {
             PhoneNumber: formattedPhone,
             CallBackURL: process.env.MPESA_CALLBACK_URL,
             AccountReference: order_id ? `Order${order_id}` : formattedPhone,
-            TransactionDesc: 'Hotel Room Service Payment',
+            TransactionDesc: 'TJ Resturant',
         };
 
         console.log('Sending STK Push to M-Pesa...');
