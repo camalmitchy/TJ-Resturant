@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const twilio = require('twilio');
 const axios = require('axios');
+const supabase = require('../supabase');
 const { getSession, saveSession, clearSession, toLocalPhone } = require('../services/whatsappSession');
 const { MENU, findMenuItem, buildMenuText } = require('../data/menu');
 
@@ -93,6 +94,26 @@ router.post('/incoming', async (req, res) => {
 
             const phone = toLocalPhone(from);
 
+            const { data: order, error: orderError } = await supabase
+                .from('orders')
+                .insert([{
+                    food_item: session.food_item,
+                    room_number: roomNumber,
+                    phone,
+                    channel: 'whatsapp',
+                    status: 'pending_payment',
+                }])
+                .select()
+                .single();
+
+            if (orderError || !order) {
+                console.error('Failed to create pending order:', orderError?.message);
+                await sendMessage(from,
+                    '⚠️ We could not start your order. Please type *hi* to try again.'
+                );
+                return;
+            }
+
             await saveSession(from, {
                 step: 'awaiting_payment',
                 food_item: session.food_item,
@@ -104,13 +125,15 @@ router.post('/incoming', async (req, res) => {
                 await axios.post(`${BACKEND_URL}/mpesa/stk-push`, {
                     phone,
                     amount: session.price,
+                    order_id: order.id,
                 });
 
                 await sendMessage(from,
-                    `📋 *Order Summary*\n\n🍽️ Item: *${session.food_item}*\n🚪 Room: *${roomNumber}*\n💰 Total: *KSh ${session.price}*\n\n💳 *Payment prompt sent!*\n\nCheck your phone for an M-Pesa payment to *TJ Resturant* of *KSh ${session.price}*. Enter your M-Pesa PIN to complete your order.\n\nYour food will be delivered to Room *${roomNumber}* once payment is confirmed. 🚀`
+                    `📋 *Order Summary*\n\n🍽️ Item: *${session.food_item}*\n🚪 Room: *${roomNumber}*\n💰 Total: *KSh ${session.price}*\n🧾 Order: *#${order.id}*\n\n💳 *Payment prompt sent!*\n\nCheck your phone for an M-Pesa payment to *TJ Resturant* of *KSh ${session.price}*. Enter your M-Pesa PIN to complete your order.\n\nPayment confirmation is usually instant once you pay. 🚀`
                 );
             } catch (mpesaError) {
                 console.error('STK push error:', mpesaError.response?.data || mpesaError.message);
+                await supabase.from('orders').delete().eq('id', order.id);
                 await sendMessage(from,
                     '⚠️ We could not send the payment prompt. Please type *hi* to try again.'
                 );
@@ -120,8 +143,25 @@ router.post('/incoming', async (req, res) => {
         }
 
         if (step === 'awaiting_payment') {
+            const phone = toLocalPhone(from);
+            const { data: latestOrder } = await supabase
+                .from('orders')
+                .select('id, status, room_number')
+                .eq('phone', phone)
+                .order('created_at', { ascending: false })
+                .limit(1)
+                .maybeSingle();
+
+            if (latestOrder?.status === 'paid') {
+                await clearSession(from);
+                await sendMessage(from,
+                    `✅ Payment received! Your order is on the way to Room *${latestOrder.room_number}*.`
+                );
+                return;
+            }
+
             await sendMessage(from,
-                `⏳ Waiting for your M-Pesa payment of *KSh ${session.price}* to *TJ Resturant* for *${session.food_item}*.\n\nComplete the prompt on your phone, or type *hi* to start a new order.`
+                `⏳ Waiting for your M-Pesa payment of *KSh ${session.price}* to *TJ Resturant* for *${session.food_item}*.\n\nComplete the prompt on your phone. Confirmation usually arrives within seconds after paying.\n\nType *hi* to start a new order.`
             );
             return;
         }

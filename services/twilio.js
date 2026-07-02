@@ -79,24 +79,45 @@ Thank you! 🙏
     return await sendWhatsAppMessage(orderData.phone, message);
 }
 
-// Send payment confirmation via WhatsApp
-async function sendPaymentConfirmation(orderData) {
+function formatReceiptDate(transactionDate) {
+    if (!transactionDate) {
+        return new Date().toLocaleString('en-KE', { timeZone: 'Africa/Nairobi' });
+    }
+
+    const raw = String(transactionDate);
+    const year = raw.slice(0, 4);
+    const month = raw.slice(4, 6);
+    const day = raw.slice(6, 8);
+    const hour = raw.slice(8, 10);
+    const minute = raw.slice(10, 12);
+
+    const date = new Date(`${year}-${month}-${day}T${hour}:${minute}:00`);
+    return date.toLocaleString('en-KE', { timeZone: 'Africa/Nairobi' });
+}
+
+// Send payment receipt via WhatsApp after successful M-Pesa payment
+async function sendPaymentConfirmation(orderData, paymentDetails = {}) {
+    const amount = paymentDetails.amount ?? orderData.amount;
+    const amountLine = amount ? `\nAmount:   *KSh ${amount}*` : '';
+    const receiptLine = paymentDetails.mpesaReceipt
+        ? `\nM-Pesa:   *${paymentDetails.mpesaReceipt}*`
+        : '';
+    const dateLine = `\nDate:     ${formatReceiptDate(paymentDetails.transactionDate)}`;
+
     const message = `
-✅ *Payment Confirmed - TJ Restaurant*
+🧾 *Payment Receipt - TJ Restaurant*
 
-Payment received successfully!
+✅ *Payment received successfully!*
 
-📋 *Order Details:*
-- Food Item: ${orderData.food_item}
-- Room Number: ${orderData.room_number}
-- Order ID: #${orderData.id}
+📋 *Order #${orderData.id}*
+━━━━━━━━━━━━━━━━
+Item:     *${orderData.food_item}*
+Room:     *${orderData.room_number}*${amountLine}${receiptLine}${dateLine}
+━━━━━━━━━━━━━━━━
 
-👨‍🍳 Your order is now being prepared.
-We'll deliver it to your room shortly.
+🚀 Your order will be delivered to Room *${orderData.room_number}* in a few minutes.
 
-Estimated time: 15-20 minutes
-
-Enjoy your meal! 🍽️
+Thank you for your order! 🙏
     `.trim();
 
     return await sendWhatsAppMessage(orderData.phone, message);
