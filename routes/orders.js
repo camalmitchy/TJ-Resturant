@@ -1,5 +1,6 @@
 const express = require('express');
 const router = express.Router();
+const axios = require('axios');
 const supabase = require('../supabase');
 
 // GET all orders (Flutter app calls this to load the dashboard)
@@ -15,7 +16,7 @@ router.get('/', async (req, res) => {
 
 // POST create a new order
 router.post('/', async (req, res) => {
-    const { food_item, room_number, phone, channel } = req.body;
+    const { food_item, room_number, phone, channel, amount } = req.body;
 
     const { data, error } = await supabase
         .from('orders')
@@ -24,6 +25,19 @@ router.post('/', async (req, res) => {
         .single();
 
     if (error) return res.status(500).json({ error: error.message });
+
+    // Trigger STK push
+    try {
+        await axios.post(`${process.env.BACKEND_URL}/mpesa/stk-push`, {
+            phone: phone,
+            amount: amount,
+            order_id: data.id
+        });
+    } catch (mpesaError) {
+        console.error('M-Pesa STK Push failed:', mpesaError.message);
+        // Still return the order even if STK push fails
+    }
+
     res.status(201).json(data);
 });
 

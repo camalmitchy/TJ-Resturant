@@ -17,6 +17,10 @@ app.use('/orders', ordersRouter);
 const menuRouter = require('./routes/menu');
 app.use('/menu', menuRouter);
 
+// Connect M-Pesa routes
+const mpesaRouter = require('./routes/mpesa');
+app.use('/mpesa', mpesaRouter);
+
 // A test route — just to confirm the server is running
 app.get('/', (req, res) => {
     res.json({ message: 'Hotel backend is running!' });
