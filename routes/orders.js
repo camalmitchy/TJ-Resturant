@@ -27,15 +27,24 @@ router.post('/', async (req, res) => {
     if (error) return res.status(500).json({ error: error.message });
 
     // Trigger STK push
-    try {
-        await axios.post(`${process.env.BACKEND_URL}/mpesa/stk-push`, {
-            phone: phone,
-            amount: amount,
-            order_id: data.id
-        });
-    } catch (mpesaError) {
-        console.error('M-Pesa STK Push failed:', mpesaError.message);
-        // Still return the order even if STK push fails
+    if (amount && phone) {
+        try {
+            const backendUrl = process.env.BACKEND_URL || 'https://tj-resturant.onrender.com';
+            console.log('Triggering STK push to:', `${backendUrl}/mpesa/stk-push`);
+
+            await axios.post(`${backendUrl}/mpesa/stk-push`, {
+                phone: phone,
+                amount: amount,
+                order_id: data.id
+            });
+
+            console.log('STK push triggered successfully');
+        } catch (mpesaError) {
+            console.error('M-Pesa STK Push failed:', mpesaError.message);
+            // Still return the order even if STK push fails
+        }
+    } else {
+        console.log('Skipping STK push - amount or phone missing');
     }
 
     res.status(201).json(data);
