@@ -4,7 +4,14 @@ const twilio = require('twilio');
 const supabase = require('../supabase');
 const axios = require('axios');
 
-const client = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
+// Initialize Twilio client
+function getTwilioClient() {
+    if (!process.env.TWILIO_ACCOUNT_SID || !process.env.TWILIO_AUTH_TOKEN) {
+        console.error('❌ Twilio credentials not found');
+        return null;
+    }
+    return twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
+}
 
 const MENU = [
     { id: 1, name: 'Chicken Burger', price: 450 },
@@ -16,15 +23,24 @@ const MENU = [
 ];
 
 async function sendMessage(to, message) {
+    const client = getTwilioClient();
+    if (!client) {
+        console.error('❌ Cannot send message - Twilio not configured');
+        return false;
+    }
+
     try {
-        await client.messages.create({
+        const result = await client.messages.create({
             from: process.env.TWILIO_WHATSAPP_NUMBER,
             to: to,
             body: message,
         });
-        console.log('WhatsApp message sent to:', to);
+        console.log('✅ WhatsApp message sent to:', to, '- SID:', result.sid);
+        return true;
     } catch (error) {
-        console.error('Error sending WhatsApp message:', error.message);
+        console.error('❌ Error sending WhatsApp message:', error.message);
+        console.error('Error details:', error);
+        return false;
     }
 }
 
