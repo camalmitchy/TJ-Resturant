@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const axios = require('axios');
 const supabase = require('../supabase');
+const { sendOrderConfirmation, sendDeliveryNotification } = require('../services/twilio');
 
 // GET all orders (Flutter app calls this to load the dashboard)
 router.get('/', async (req, res) => {
@@ -25,6 +26,17 @@ router.post('/', async (req, res) => {
         .single();
 
     if (error) return res.status(500).json({ error: error.message });
+
+    // Send WhatsApp order confirmation
+    if (channel === 'whatsapp' || channel === 'phone_call') {
+        try {
+            await sendOrderConfirmation(data);
+            console.log('WhatsApp order confirmation sent');
+        } catch (whatsappError) {
+            console.error('WhatsApp notification failed:', whatsappError.message);
+            // Don't fail the order creation if WhatsApp fails
+        }
+    }
 
     // Trigger STK push
     if (amount && phone) {
@@ -63,6 +75,17 @@ router.patch('/:id', async (req, res) => {
         .single();
 
     if (error) return res.status(500).json({ error: error.message });
+
+    // Send WhatsApp notification when order is delivered
+    if (status === 'delivered' && data) {
+        try {
+            await sendDeliveryNotification(data);
+            console.log('WhatsApp delivery notification sent');
+        } catch (whatsappError) {
+            console.error('WhatsApp notification failed:', whatsappError.message);
+        }
+    }
+
     res.json(data);
 });
 

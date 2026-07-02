@@ -2,6 +2,8 @@ const express = require('express');
 const router = express.Router();
 const axios = require('axios');
 const supabase = require('../supabase');
+const { sendOrderNotification } = require('../services/firebase');
+const { sendPaymentConfirmation } = require('../services/twilio');
 
 // Step 1: Get an access token from Safaricom
 async function getAccessToken() {
@@ -102,12 +104,27 @@ router.post('/callback', async (req, res) => {
             const { data, error } = await supabase
                 .from('orders')
                 .update({ status: 'paid' })
-                .eq('id', orderId);
+                .eq('id', orderId)
+                .select()
+                .single();
 
             if (error) {
                 console.error('Supabase update error:', error);
             } else {
                 console.log(`✅ Order ${orderId} marked as paid`, data);
+
+                // Send push notification to admin
+                if (data) {
+                    await sendOrderNotification(data);
+
+                    // Send WhatsApp payment confirmation to customer
+                    try {
+                        await sendPaymentConfirmation(data);
+                        console.log('WhatsApp payment confirmation sent');
+                    } catch (whatsappError) {
+                        console.error('WhatsApp notification failed:', whatsappError.message);
+                    }
+                }
             }
         } else {
             console.log('❌ Payment failed or cancelled:', body.ResultDesc);
