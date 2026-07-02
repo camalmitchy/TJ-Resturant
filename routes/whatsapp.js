@@ -1,12 +1,12 @@
 const express = require('express');
 const router = express.Router();
 const twilio = require('twilio');
-const supabase = require('../supabase');
 const axios = require('axios');
+const { getSession, saveSession, clearSession, toLocalPhone } = require('../services/whatsappSession');
 
 const client = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
+const BACKEND_URL = process.env.BACKEND_URL || 'https://tj-resturant.onrender.com';
 
-// ─── MENU ────────────────────────────────────────────────────────────────────
 const MENU = [
     { id: 1, name: 'Chicken Burger', price: 450 },
     { id: 2, name: 'Club Sandwich', price: 380 },
@@ -16,100 +16,63 @@ const MENU = [
     { id: 6, name: 'Fresh Juice', price: 180 },
 ];
 
-// ─── HELPER: send a WhatsApp message via Twilio ───────────────────────────────
+const START_KEYWORDS = ['hi', 'hello', 'order', 'menu', 'start'];
+
 async function sendMessage(to, message) {
     await client.messages.create({
-        from: process.env.TWILIO_WHATSAPP_NUMBER, // e.g. whatsapp:+14155238886
-        to: to,
+        from: process.env.TWILIO_WHATSAPP_NUMBER,
+        to,
         body: message,
     });
 }
 
-// ─── HELPER: get conversation state from DB ───────────────────────────────────
-// Uses maybeSingle() — returns null safely when no row exists (first-time customer)
-// .single() was the bug — it throws an error on no result and crashes the whole webhook
-async function getConversation(phone) {
-    const { data, error } = await supabase
-        .from('conversations')
-        .select('*')
-        .eq('phone', phone)
-        .maybeSingle(); // ← CRITICAL FIX: won't crash when customer is new
-
-    if (error) {
-        console.error('Error fetching conversation:', error.message);
-        return null;
-    }
-    return data; // null if no conversation, object if found
+function buildMenuText() {
+    return MENU.map(item => `${item.id}. ${item.name} — KES ${item.price}`).join('\n');
 }
 
-// ─── HELPER: save/update conversation state ───────────────────────────────────
-async function saveConversation(phone, updates) {
-    const { error } = await supabase
-        .from('conversations')
-        .upsert(
-            { phone, ...updates },
-            { onConflict: 'phone' } // ← CRITICAL FIX: tells Supabase to UPDATE if phone exists
-        );
-
-    if (error) {
-        console.error('Error saving conversation:', error.message);
-    }
-}
-
-// ─── HELPER: clear conversation after order is placed or cancelled ────────────
-async function clearConversation(phone) {
-    const { error } = await supabase
-        .from('conversations')
-        .delete()
-        .eq('phone', phone);
-
-    if (error) {
-        console.error('Error clearing conversation:', error.message);
-    }
-}
-
-// ─── MAIN WEBHOOK ─────────────────────────────────────────────────────────────
-// Twilio calls this URL every time a customer sends your WhatsApp number a message
 router.post('/incoming', async (req, res) => {
-    // Always respond 200 to Twilio immediately — it expects this fast acknowledgement
-    // If you don't, Twilio retries the webhook multiple times
     res.sendStatus(200);
 
-    const from = req.body.From;          // e.g. "whatsapp:+254712345678"
-    const body = req.body.Body?.trim();  // what the customer typed
+    const from = req.body.From;
+    const body = req.body.Body?.trim();
 
     if (!from || !body) return;
 
     console.log(`Incoming from ${from}: "${body}"`);
 
     try {
-        // Get this customer's current conversation state
-        const convo = await getConversation(from);
-        const step = convo?.step;
+        const { data: session, error: sessionError } = await getSession(from);
+
+        if (sessionError) {
+            await sendMessage(from,
+                '⚠️ Our ordering system is temporarily unavailable. Please try again in a moment.'
+            );
+            return;
+        }
+
+        const step = session?.step || 'start';
         const normalised = body.toLowerCase();
 
-        // ── RESET TRIGGER: customer types hi/hello/order/menu at any point ──────
-        if (!step || ['hi', 'hello', 'order', 'menu', 'start'].includes(normalised)) {
-            const menuText = MENU.map(item =>
-                `${item.id}. ${item.name} — KES ${item.price}`
-            ).join('\n');
-
+        if (START_KEYWORDS.includes(normalised) || !session) {
             await sendMessage(from,
-                `👋 Welcome to Hotel Room Service!\n\nHere is our menu:\n\n${menuText}\n\nReply with the *number* of the item you want to order.`
+                `👋 Welcome to Hotel Room Service!\n\nHere is our menu:\n\n${buildMenuText()}\n\nReply with the *number* of the item you want to order.`
             );
 
-            await saveConversation(from, {
+            const { error: saveError } = await saveSession(from, {
                 step: 'menu_shown',
                 food_item: null,
                 price: null,
                 room_number: null,
             });
+
+            if (saveError) {
+                console.error('Failed to persist menu_shown session for', from);
+            }
             return;
         }
 
-        // ── STEP: menu_shown → customer should reply with a menu number ──────────
         if (step === 'menu_shown') {
-            const choice = parseInt(body);
+            const choice = parseInt(body, 10);
             const selectedItem = MENU.find(item => item.id === choice);
 
             if (!selectedItem) {
@@ -123,7 +86,7 @@ router.post('/incoming', async (req, res) => {
                 `✅ You selected: *${selectedItem.name}* — KES ${selectedItem.price}\n\nWhat is your *room number*? (e.g. 204)`
             );
 
-            await saveConversation(from, {
+            await saveSession(from, {
                 step: 'room_asked',
                 food_item: selectedItem.name,
                 price: selectedItem.price,
@@ -132,103 +95,53 @@ router.post('/incoming', async (req, res) => {
             return;
         }
 
-        // ── STEP: room_asked → customer should type their room number ────────────
         if (step === 'room_asked') {
-            const roomNumber = body;
+            const roomNumber = body.trim();
 
-            // Basic validation — room number should not be empty or just spaces
-            if (!roomNumber || roomNumber.length < 1) {
+            if (!roomNumber) {
                 await sendMessage(from, 'Please enter your room number (e.g. 204).');
                 return;
             }
 
-            await sendMessage(from,
-                `📋 *Order Summary*\n\n🍽️ Item: *${convo.food_item}*\n🚪 Room: *${roomNumber}*\n💰 Total: *KES ${convo.price}*\n\nReply *YES* to confirm and pay, or *NO* to cancel.`
-            );
+            const phone = toLocalPhone(from);
 
-            // Save room number to conversation state
-            await saveConversation(from, {
-                step: 'confirming',
-                food_item: convo.food_item,
-                price: convo.price,
-                room_number: roomNumber,   // ← CRITICAL FIX: was missing from table before
+            await saveSession(from, {
+                step: 'awaiting_payment',
+                food_item: session.food_item,
+                price: session.price,
+                room_number: roomNumber,
             });
-            return;
-        }
 
-        // ── STEP: confirming → customer says YES or NO ───────────────────────────
-        if (step === 'confirming') {
-            if (normalised === 'yes') {
-                // Convert WhatsApp number format to local Kenyan format
-                // from = "whatsapp:+254712345678" → "0712345678"
-                const phone = '0' + from.replace('whatsapp:+254', '');
+            try {
+                await axios.post(`${BACKEND_URL}/mpesa/stk-push`, {
+                    phone,
+                    amount: session.price,
+                });
 
-                // 1. Create order in database
-                const { data: order, error: orderError } = await supabase
-                    .from('orders')
-                    .insert([{
-                        food_item: convo.food_item,
-                        room_number: convo.room_number,
-                        phone: phone,
-                        channel: 'whatsapp',
-                        status: 'pending_payment',
-                    }])
-                    .select()
-                    .single();
-
-                if (orderError) {
-                    console.error('Error creating order:', orderError.message);
-                    await sendMessage(from, '⚠️ Something went wrong creating your order. Please try again by typing *hi*.');
-                    await clearConversation(from);
-                    return;
-                }
-
-                console.log(`Order created: ID ${order.id}`);
-
-                // 2. Trigger M-Pesa STK push
-                try {
-                    await axios.post(`${process.env.BACKEND_URL}/mpesa/stk-push`, {
-                        phone: phone,
-                        amount: convo.price,
-                        order_id: order.id,
-                    });
-
-                    await sendMessage(from,
-                        `💳 *Payment prompt sent!*\n\nCheck your phone for an M-Pesa request of *KES ${convo.price}*.\n\nEnter your M-Pesa PIN to complete your order. Your food will be delivered to Room *${convo.room_number}* once payment is confirmed. 🚀`
-                    );
-                } catch (mpesaError) {
-                    console.error('STK push error:', mpesaError.message);
-                    // Order is created but payment prompt failed — let customer know
-                    await sendMessage(from,
-                        `✅ Order placed (ID: ${order.id}) but the payment prompt failed to send. Please call us to complete payment for Room ${convo.room_number}.`
-                    );
-                }
-
-                // 3. Clear conversation — this order flow is done
-                await clearConversation(from);
-
-            } else if (normalised === 'no') {
                 await sendMessage(from,
-                    '❌ Order cancelled. Type *hi* anytime to start a new order.'
+                    `📋 *Order Summary*\n\n🍽️ Item: *${session.food_item}*\n🚪 Room: *${roomNumber}*\n💰 Total: *KES ${session.price}*\n\n💳 *Payment prompt sent!*\n\nCheck your phone for an M-Pesa request of *KES ${session.price}*. Enter your M-Pesa PIN to complete your order.\n\nYour food will be delivered to Room *${roomNumber}* once payment is confirmed. 🚀`
                 );
-                await clearConversation(from);
-
-            } else {
-                // Customer typed something other than yes or no
+            } catch (mpesaError) {
+                console.error('STK push error:', mpesaError.response?.data || mpesaError.message);
                 await sendMessage(from,
-                    `Please reply *YES* to confirm your order or *NO* to cancel.\n\n🍽️ ${convo.food_item} — KES ${convo.price} → Room ${convo.room_number}`
+                    '⚠️ We could not send the payment prompt. Please type *hi* to try again.'
                 );
+                await clearSession(from);
             }
             return;
         }
 
-        // ── FALLBACK: unknown state ───────────────────────────────────────────────
-        await sendMessage(from, 'Type *hi* to start ordering. 😊');
-        await clearConversation(from); // reset any broken state
+        if (step === 'awaiting_payment') {
+            await sendMessage(from,
+                `⏳ Waiting for your M-Pesa payment of *KES ${session.price}* for *${session.food_item}*.\n\nComplete the prompt on your phone, or type *hi* to start a new order.`
+            );
+            return;
+        }
 
+        await sendMessage(from, 'Type *hi* to start ordering. 😊');
+        await clearSession(from);
     } catch (err) {
         console.error('Webhook error:', err);
-        // Try to send a fallback message to the customer
         try {
             await sendMessage(from, '⚠️ Something went wrong on our end. Please type *hi* to try again.');
         } catch (_) { }
